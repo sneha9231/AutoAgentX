@@ -41,9 +41,9 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
    npm start
    ```
 4. Start electron application in different environment
-    '''sh
+    ```sh
     npm run electron
-    '''
+    ```
 
 ## Usage
 - Open the application and capture an SQL-related query on the screen.
