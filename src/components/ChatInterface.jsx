@@ -17,14 +17,14 @@ import {
   Button,
   Typography
 } from '@mui/material';
-import { Send, ScreenshotMonitor, Pause, SmartToy, Email, ContentCopy, DeleteSweep, Event } from '@mui/icons-material';
+import { Send, ScreenshotMonitor, Pause, SmartToy, ContentCopy, DeleteSweep, Event, BarChart, Email } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Tesseract from 'tesseract.js';
 import calendarService from '../utils/calendarService';
-// For debugging
-console.log("API Key:", process.env.REACT_APP_GROQ_API_KEY);
+import SimpleBarChart from './SimpleBarChart';
+import { extractSQLQuery, parseTableData } from '../utils/sqlParser';
 
-// Access to electron IPC if running in electron
+// The actual Electron imports - only available when running in Electron
 const electron = window.require ? window.require('electron') : null;
 const ipcRenderer = electron ? electron.ipcRenderer : null;
 
@@ -52,6 +52,48 @@ function ChatInterface() {
   
   // Calendar state
   const [isCalendarAvailable, setIsCalendarAvailable] = useState(false);
+  
+  // SQL Visualization states
+  const [sqlVisualizationOpen, setSqlVisualizationOpen] = useState(false);
+  const [sqlData, setSqlData] = useState(null);
+  const [sqlQuery, setSqlQuery] = useState('');
+  const [hasSQL, setHasSQL] = useState(false);
+
+  // Add state for meeting detection
+  const [isMeetingRelated, setIsMeetingRelated] = useState(false);
+  const [meetingDetails, setMeetingDetails] = useState(null);
+  const [showMeetingConfirmation, setShowMeetingConfirmation] = useState(false);
+  
+  // Function to detect if content is meeting-related and extract details
+  const detectMeetingContent = (text) => {
+    if (!text) return { isMeetingRelated: false, details: null };
+    
+    // Check if it contains meeting-related keywords
+    const meetingPattern = /meeting|schedule|appointment|call|discuss|zoom|teams|google meet|conference/i;
+    const datePattern = /(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:\w*)|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}|tomorrow|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i;
+    const timePattern = /(\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight|\d{1,2}\s*o'?clock)/i;
+    
+    const hasMeetingWords = meetingPattern.test(text);
+    const hasDateWords = datePattern.test(text);
+    const hasTimeWords = timePattern.test(text);
+    
+    // Only consider it a meeting if it has meeting words AND either date or time information
+    if (hasMeetingWords && (hasDateWords || hasTimeWords)) {
+      // Try to extract potential date and time
+      const dateMatch = text.match(datePattern);
+      const timeMatch = text.match(timePattern);
+      
+      const details = {
+        date: dateMatch ? dateMatch[0] : null,
+        time: timeMatch ? timeMatch[0] : null,
+        rawText: text
+      };
+      
+      return { isMeetingRelated: true, details };
+    }
+    
+    return { isMeetingRelated: false, details: null };
+  };
 
   // Add localStorage persistence for messages
   useEffect(() => {
@@ -68,7 +110,7 @@ function ChatInterface() {
       if (parsedMessages.length === 0) {
         const initialMessages = [
           { 
-            text: "👋 Welcome! I'm your AI assistant. I can help you with various tasks like solving SQL queries.", 
+            text: "👋 Welcome! I'm your AI assistant. I can help you with various tasks like solving SQL queries and scheduling meetings.", 
             sender: 'ai' 
           }
         ];
@@ -504,6 +546,7 @@ For drafting a reply, analyzing the email, or anything related to this email con
     setIsCapturing(true);
     setSuggestedQueries([]);
     setEmailData(null);
+    setHasSQL(false); // Reset SQL detection
     
     try {
         // Capture the screen
@@ -527,36 +570,81 @@ For drafting a reply, analyzing the email, or anything related to this email con
             // Store the cleaned text for future reference
             setCapturedText(cleanedText);
 
-            // Determine if this is an email
+            // Check for SQL query and table data in the captured text
+            const sqlQuery = extractSQLQuery(cleanedText);
+            const tableData = parseTableData(cleanedText);
+            
+            // Determine if we have valid table data
+            const hasValidTableData = tableData && tableData.length > 0;
+            
+            // Check for SQL-like content
+            const hasSqlKeywords = /SELECT|FROM|WHERE|JOIN|GROUP BY|ORDER BY|INSERT|UPDATE|DELETE/i.test(cleanedText);
+            const hasTableKeywords = /table|database|sql|rows?|records?|results?|id|name|score|data|values?/i.test(cleanedText);
+            
+            // More lenient SQL detection - any of these conditions can trigger visualization
+            if (sqlQuery || 
+                (hasValidTableData && tableData.length >= 2) || 
+                (hasValidTableData && (hasSqlKeywords || hasTableKeywords))) {
+                
+                console.log("SQL/Table content detected:", { 
+                    sqlQuery, 
+                    tableDataLength: tableData ? tableData.length : 0,
+                    hasValidTableData,
+                    hasSqlKeywords,
+                    hasTableKeywords
+                });
+                
+                // Always set SQL data when we have table data, even without SQL query
+                if (tableData) {
+                    setSqlData(tableData);
+                    setHasSQL(true);
+                }
+                
+                if (sqlQuery) {
+                    setSqlQuery(sqlQuery);
+                    setHasSQL(true);
+                }
+                
+                // If either condition was met, show notification
+                if (hasValidTableData || sqlQuery) {
+                    setInfoSnack({
+                        open: true,
+                        message: "Table data detected! Click the 'Visualize Data' button to see charts."
+                    });
+                }
+            } else {
+                console.log("No SQL/Table content detected in capture");
+                setHasSQL(false);
+            }
+
+            // Determine if this is an email or meeting-related content
             const hasEmailWords = /would like to schedule|meeting|collaboration|availability|email|message/i.test(cleanedText);
             const isEmail = emailData !== null || hasEmailWords;
+            
+            // Check if the content is related to scheduling a meeting
+            const { isMeetingRelated, details } = detectMeetingContent(cleanedText);
+            if (isMeetingRelated) {
+                console.log("Meeting-related content detected:", details);
+                setIsMeetingRelated(true);
+                setMeetingDetails(details);
+                setShowMeetingConfirmation(true);
+                
+                // Show a notification that meeting content was detected
+                setInfoSnack({
+                    open: true,
+                    message: "Meeting request detected! You can confirm or reschedule."
+                });
+            } else {
+                setIsMeetingRelated(false);
+                setMeetingDetails(null);
+            }
             
             // Generate suggested queries based on the content
             const suggestions = await generateSuggestedQueries(cleanedText, isEmail);
             setSuggestedQueries(suggestions);
 
-            // Check if the captured content looks like an email about scheduling
-            if (isEmail && !emailAnalysisInProgress) {
-                console.log("Detected email content, analyzing for scheduling...");
-                // Set flag before starting analysis to prevent duplicates
-                setEmailAnalysisInProgress(true);
-                
-                // Use Groq to analyze the email and detect scheduling intent
-                try {
-                    await analyzeEmailForScheduling(cleanedText);
-                } catch (error) {
-                    console.error("Error during email analysis:", error);
-                    setEmailAnalysisInProgress(false); // Reset flag on error
-                }
-            } else if (isEmail) {
-                console.log("Email detected but analysis already in progress, skipping duplicate analysis");
-                setInfoSnack({
-                    open: true,
-                    message: "Email content captured. Analysis already in progress."
-                });
-            } else {
-                // For non-email captures, directly add the content to the chat context
-                // and show snackbar notification
+            // For non-email, non-SQL captures, directly add the content to the chat context
+            if (!isEmail && !hasValidTableData && !sqlQuery) {
                 setInfoSnack({
                     open: true,
                     message: "Screen content captured! You can now ask questions about it."
@@ -789,7 +877,7 @@ For drafting a reply, analyzing the email, or anything related to this email con
       if (messages.length === 0) {
         setMessages([
           { 
-            text: "👋 Welcome! I'm your AI assistant. I can help you with various tasks like solving SQL queries.", 
+            text: "👋 Welcome! I'm your AI assistant. I can help you with various tasks like solving SQL queries and scheduling meetings.", 
             sender: 'ai' 
           }
         ]);
@@ -817,82 +905,123 @@ For drafting a reply, analyzing the email, or anything related to this email con
   // Original handleSend function with LLM context detection
   const handleSend = async () => {
     if (!message.trim() || isLoading) return;
-
-    // Add user message
-    setMessages(prev => [...prev, { text: message, sender: 'user' }]);
-    const userMessage = message;
+    
+    // Clear any active typewriter effect
+    if (typingInterval) {
+      clearInterval(typingInterval);
+      setTypingInterval(null);
+    }
+    
+    // Check if the user is confirming a meeting
+    if (isMeetingRelated && meetingDetails && /confirm|yes|accept/i.test(message.trim())) {
+      // Handle it as a meeting confirmation
+      setMessage('');
+      handleConfirmMeeting();
+      return;
+    }
+    
+    // Check if the user is rescheduling a meeting with words like "reschedule", "change time", etc.
+    if (isMeetingRelated && meetingDetails && /reschedule|change(\s+the)?\s+time|different time|another time/i.test(message.trim())) {
+      // Handle it as a meeting reschedule
+      setMessage('');
+      handleRescheduleMeeting();
+      return;
+    }
+    
+    // Add the user's message to the chat
+    const userMessageText = message;
+    const userMessage = { id: Date.now(), sender: 'user', text: userMessageText };
+    setMessages(prev => [...prev, userMessage]);
     setMessage('');
     setIsLoading(true);
-
-    // Check if this is a response to a rescheduling request
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage && lastMessage.sender === 'ai' && lastMessage.rescheduling) {
+    
+    // Directly check for scheduling requests with specific patterns like "Schedule a meeting on 31-03-2025 at 5 pm"
+    const directSchedulingMatch = userMessageText.match(/schedule\s+(?:a|an)?\s*meeting\s+on\s+(\d{1,2}[-\/]\d{1,2}[-\/]\d{4})\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
+    
+    if (directSchedulingMatch) {
       try {
-        // This is a response to a rescheduling request
-        const reschedulingInfo = lastMessage.rescheduling;
+        const extractedDate = directSchedulingMatch[1];
+        const extractedTime = directSchedulingMatch[2];
         
-        // Generate an email draft for rescheduling
-        const emailDraft = `
-Subject: Rescheduling Meeting - ${reschedulingInfo.purpose || 'Discussion'}
-
-Hello,
-
-Thank you for proposing a meeting on ${reschedulingInfo.originalDate} at ${reschedulingInfo.originalTime}.
-
-Unfortunately, I'm not available at that time. I would like to propose rescheduling to ${userMessage}.
-
-Please let me know if this alternative time works for you.
-
-Best regards,
-[Your Name]
-        `;
+        console.log("Direct meeting scheduling detected:", { date: extractedDate, time: extractedTime });
         
-        // Add the email draft as AI response
-        setMessages(prev => [...prev, {
-          text: `Here's a draft email you can send to reschedule the meeting:
-
-${emailDraft}
-
-Would you like me to adjust anything in this draft?`,
-          sender: 'ai'
+        // Extract any title/purpose context
+        let purpose = 'Meeting';
+        const titleMatch = userMessageText.match(/(?:about|for|to discuss)\s+['"]?([^'".,]+)['"]?/i);
+        if (titleMatch) {
+          purpose = titleMatch[1].trim();
+        }
+        
+        // Extract any attendees
+        let attendees = [];
+        const attendeeMatch = userMessageText.match(/(?:with|including)\s+([^.,]+)/i);
+        if (attendeeMatch) {
+          const potentialAttendees = attendeeMatch[1].split(/,|\s+and\s+/);
+          attendees = potentialAttendees.map(a => a.trim()).filter(a => a);
+        }
+        
+        const meetingDetail = {
+          date: extractedDate,
+          time: extractedTime,
+          purpose: purpose,
+          participants: attendees
+        };
+        
+        // Create a loading message
+        setMessages(prev => [...prev, { 
+          text: `Creating your meeting on ${extractedDate} at ${extractedTime}...`, 
+          sender: 'ai' 
+        }]);
+        
+        // Schedule the meeting
+        await scheduleMeeting(meetingDetail);
+        
+        // Send success message
+        const successMessage = `I've scheduled your meeting${purpose !== 'Meeting' ? ` about "${purpose}"` : ''} on ${extractedDate} at ${extractedTime}`;
+        
+        setMessages(prev => [...prev, { 
+          text: successMessage, 
+          sender: 'ai' 
         }]);
         
         setIsLoading(false);
         return;
       } catch (error) {
-        console.error("Error handling rescheduling:", error);
-        // Continue with normal message handling if rescheduling fails
+        console.error("Error with direct scheduling:", error);
+        // Continue with normal processing if direct scheduling fails
       }
     }
 
     // First check if this is a calendar scheduling request using the LLM
-    const containsDateOrTime = /(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}(st|nd|rd|th)?|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|noon|midnight)/i.test(userMessage);
-
+    const containsDateOrTime = /(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month|january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}(st|nd|rd|th)?|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|noon|midnight)/i.test(userMessageText);
+    
     if (containsDateOrTime) {
       try {
+        // This might be a calendar scheduling request
         const apiKey = process.env.REACT_APP_GROQ_API_KEY;
-        if (!apiKey) {
-          throw new Error('Groq API key is not configured.');
-        }
         
-        // Create system message for context detection
+        // Use a system prompt to check if this is a scheduling request
         const systemPrompt = `
-        Analyze the following user message to determine its intent.
-        Return a JSON object with the following structure:
+        Determine if the user is trying to schedule a meeting or calendar event.
+        If they are, return ONLY the following JSON:
         {
-          "intent": "schedule_meeting" | "draft_email" | "other",
-          "confidence": 0-1 (how confident you are in your classification),
-          "reason": "brief explanation of why you classified it this way"
+          "isSchedulingRequest": true,
+          "eventDetails": {
+            "title": "extracted title or meeting purpose",
+            "startDate": "extracted date (MM/DD/YYYY format)",
+            "startTime": "extracted time (HH:MM AM/PM format)",
+            "duration": "extracted duration in minutes or 30 by default",
+            "attendees": "extracted attendees/participants (comma separated)"
+          }
         }
         
-        "schedule_meeting" - if the user wants to directly create a calendar event or meeting
-        "draft_email" - if the user wants to compose/draft an email about a meeting (not directly schedule it)
-        "other" - if the message has another intent that doesn't involve scheduling or email drafting
-        
-        Only return valid JSON. Do not include any other text in your response.
+        If they are NOT trying to schedule anything, return ONLY:
+        {
+          "isSchedulingRequest": false
+        }
         `;
         
-        // Make API call for context detection
+        // Check if this is a scheduling request
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -903,306 +1032,75 @@ Would you like me to adjust anything in this draft?`,
             model: 'llama-3.3-70b-versatile',
             messages: [
               { role: 'system', content: systemPrompt },
-              { role: 'user', content: userMessage }
+              { role: 'user', content: userMessageText }
             ],
             temperature: 0.2,
-            max_tokens: 128
+            max_tokens: 1024
           })
         });
         
         if (!response.ok) {
-          throw new Error('Failed to analyze message context');
+          throw new Error('Failed to check if message is a scheduling request.');
         }
         
         const data = await response.json();
         
         if (data.choices && data.choices.length > 0) {
+          const responseText = data.choices[0].message.content;
+          
           try {
-            // Parse the JSON response
-            const contextResult = JSON.parse(data.choices[0].message.content);
-            const intent = contextResult.intent;
-            const isConfident = contextResult.confidence > 0.7;
+            // Try to parse the response as JSON
+            let parsedResponse;
             
-            if (intent === "draft_email" && isConfident) {
-              // Handle drafting an email
-              setMessages(prev => [...prev, { 
-                text: `I'll help you draft an email for the meeting. Here's a suggested draft based on your request:
-
-To: [Recipient]
-Subject: Meeting on [Date mentioned in your message]
-
-Dear [Recipient],
-
-I hope this message finds you well. I'd like to schedule a meeting to discuss [topic] on [date and time from your message].
-
-Please let me know if this time works for you, or if you'd prefer an alternative date/time.
-
-Best regards,
-[Your name]`,
-                sender: 'ai' 
-              }]);
-              setIsLoading(false);
-              return;
-            } else if (intent === "schedule_meeting" && isConfident) {
-              // Continue with the existing scheduling logic
-              
-              // This is our old scheduling logic
-              if (!isCalendarAvailable) {
-                // User needs to authenticate with Google Calendar first
-                setMessages(prev => [...prev, { 
-                  text: "I'd like to help you schedule that, but you need to connect to Google Calendar first. Would you like to connect now?", 
-                  sender: 'ai' 
-                }]);
-                
-                // Show authenticate option
-                setSuggestedQueries(["Yes, connect to Google Calendar"]);
-                setIsLoading(false);
-                return;
+            // Some additional parsing to handle cases where model might add extra text
+            try {
+              const jsonStart = responseText.indexOf('{');
+              const jsonEnd = responseText.lastIndexOf('}') + 1;
+              if (jsonStart !== -1 && jsonEnd !== -1) {
+                parsedResponse = JSON.parse(responseText.substring(jsonStart, jsonEnd));
               } else {
-                // Extract event details directly from the user message
-                try {
-                  // Extract event details directly from the user message
-                  let eventDetails = {
-                    title: null,
-                    description: "",
-                    startDate: null,
-                    startTime: null,
-                    duration: 60, // Default duration (minutes)
-                    attendees: []
-                  };
-                  
-                  // Use existing extraction code
-                  // Extract title - look for common patterns
-                  const titleMatch = userMessage.match(/titled\s*["']([^"']+)["']|["']([^"']+)["']|meeting with\s+([a-zA-Z0-9 ]+)/i);
-                  if (titleMatch) {
-                    eventDetails.title = titleMatch[1] || titleMatch[2] || titleMatch[3];
-                  } else {
-                    // Try to extract a possible meeting subject
-                    const meetingMatch = userMessage.match(/schedule (?:a|an) ([a-zA-Z0-9 ]+) (?:on|at|for|with)/i);
-                    if (meetingMatch) {
-                      eventDetails.title = meetingMatch[1];
-                    } else {
-                      eventDetails.title = "Meeting";  // Default title
-                    }
-                  }
-                  
-                  // Continue with existing date/time extraction code...
-                  // Extract date - try various formats
-                  const datePatterns = [
-                    // MM/DD/YYYY or DD/MM/YYYY or YYYY/MM/DD
-                    {
-                      regex: /(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/i,
-                      handler: (match) => {
-                        let year = parseInt(match[3], 10);
-                        // If year is 2 digits, assume 2000s
-                        if (year < 100) year += 2000;
-                        
-                        // Assume MM/DD/YYYY format (common in US)
-                        let month = parseInt(match[1], 10);
-                        let day = parseInt(match[2], 10);
-                        
-                        // Validate month and day
-                        if (month > 12) {
-                          // Likely DD/MM/YYYY format
-                          [month, day] = [day, month];
-                        }
-                        
-                        return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-                      }
-                    },
-                    // YYYY/MM/DD
-                    {
-                      regex: /(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/i,
-                      handler: (match) => {
-                        const year = parseInt(match[1], 10);
-                        const month = parseInt(match[2], 10);
-                        const day = parseInt(match[3], 10);
-                        return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-                      }
-                    },
-                    // Month name formats (27 March 2025, March 27 2025, etc.)
-                    {
-                      regex: /(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})|((january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}))/i,
-                      handler: (match) => {
-                        const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-                        let day, month, year;
-                        
-                        if (match[1]) {
-                          // Format: 27 March 2025
-                          day = parseInt(match[1], 10);
-                          month = months.findIndex(m => m.toLowerCase() === match[2].toLowerCase()) + 1;
-                          year = parseInt(match[3], 10);
-                        } else {
-                          // Format: March 27, 2025
-                          month = months.findIndex(m => m.toLowerCase() === match[4].toLowerCase()) + 1;
-                          day = parseInt(match[6], 10);
-                          year = parseInt(match[7], 10);
-                        }
-                        
-                        return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-                      }
-                    },
-                    // Relative dates (today, tomorrow, next Monday, etc.)
-                    {
-                      regex: /(today|tomorrow|next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(monday|tuesday|wednesday|thursday|friday|saturday|sunday))/i,
-                      handler: (match) => {
-                        const today = new Date();
-                        const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-                        let resultDate = new Date(today);
-                        
-                        if (match[0].toLowerCase() === 'today') {
-                          // Today - use as is
-                        } else if (match[0].toLowerCase() === 'tomorrow') {
-                          resultDate.setDate(today.getDate() + 1);
-                        } else {
-                          // Handle day names
-                          let dayName;
-                          if (match[2]) {
-                            // "next Monday"
-                            dayName = match[2].toLowerCase();
-                          } else if (match[3]) {
-                            // just "Monday"
-                            dayName = match[3].toLowerCase();
-                          }
-                          
-                          const targetDay = days.indexOf(dayName);
-                          if (targetDay !== -1) {
-                            const currentDay = today.getDay();
-                            let daysToAdd;
-                            
-                            if (match[0].toLowerCase().includes('next')) {
-                              // "next Monday" - find the day after a week
-                              daysToAdd = 7 + (targetDay - currentDay);
-                              if (daysToAdd > 7) daysToAdd -= 7;
-                            } else {
-                              // just "Monday" - find the upcoming day
-                              daysToAdd = targetDay - currentDay;
-                              if (daysToAdd <= 0) daysToAdd += 7; // If day already passed, go to next week
-                            }
-                            
-                            resultDate.setDate(today.getDate() + daysToAdd);
-                          }
-                        }
-                        
-                        const year = resultDate.getFullYear();
-                        const month = (resultDate.getMonth() + 1).toString().padStart(2, '0');
-                        const day = resultDate.getDate().toString().padStart(2, '0');
-                        
-                        return `${year}-${month}-${day}`;
-                      }
-                    }
-                  ];
-                  
-                  // Try each date pattern until we find a match
-                  for (const pattern of datePatterns) {
-                    const match = userMessage.match(pattern.regex);
-                    if (match) {
-                      eventDetails.startDate = pattern.handler(match);
-                      if (eventDetails.startDate) break;
-                    }
-                  }
-                  
-                  // If no date was extracted, default to tomorrow
-                  if (!eventDetails.startDate) {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    const year = tomorrow.getFullYear();
-                    const month = (tomorrow.getMonth() + 1).toString().padStart(2, '0');
-                    const day = tomorrow.getDate().toString().padStart(2, '0');
-                    eventDetails.startDate = `${year}-${month}-${day}`;
-                  }
-                  
-                  // Extract time - try various formats
-                  const timeMatch = userMessage.match(/(\d{1,2}):(\d{2})(?:\s*(am|pm))?|(\d{1,2})\s*(am|pm)|at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-                  if (timeMatch) {
-                    let hours = 9, minutes = 0; // Default to 9:00am
-                    
-                    if (timeMatch[1] && timeMatch[2]) {
-                      // Format: 3:30pm or 15:30
-                      hours = parseInt(timeMatch[1], 10);
-                      minutes = parseInt(timeMatch[2], 10);
-                      
-                      // Convert from 12h to 24h format if needed
-                      if (timeMatch[3] && timeMatch[3].toLowerCase() === 'pm' && hours < 12) {
-                        hours += 12;
-                      } else if (timeMatch[3] && timeMatch[3].toLowerCase() === 'am' && hours === 12) {
-                        hours = 0;
-                      }
-                    } else if (timeMatch[4] && timeMatch[5]) {
-                      // Format: 3pm
-                      hours = parseInt(timeMatch[4], 10);
-                      minutes = 0;
-                      
-                      // Convert from 12h to 24h format if needed
-                      if (timeMatch[5].toLowerCase() === 'pm' && hours < 12) {
-                        hours += 12;
-                      } else if (timeMatch[5].toLowerCase() === 'am' && hours === 12) {
-                        hours = 0;
-                      }
-                    } else if (timeMatch[6]) {
-                      // Format: at 3pm or at 3:30pm
-                      hours = parseInt(timeMatch[6], 10);
-                      minutes = timeMatch[7] ? parseInt(timeMatch[7], 10) : 0;
-                      
-                      // Convert from 12h to 24h format if needed
-                      if (timeMatch[8] && timeMatch[8].toLowerCase() === 'pm' && hours < 12) {
-                        hours += 12;
-                      } else if (timeMatch[8] && timeMatch[8].toLowerCase() === 'am' && hours === 12) {
-                        hours = 0;
-                      }
-                    }
-                    
-                    // Format the time string
-                    eventDetails.startTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-                  } else {
-                    // Default to 9:00 AM
-                    eventDetails.startTime = "09:00";
-                  }
-                  
-                  // Extract duration
-                  const durationMatch = userMessage.match(/for\s+(\d+)\s+hour|for\s+(\d+)\s+hr|(\d+)\s+hour|(\d+)\s+hr|for\s+(\d+)\s+min|for\s+(\d+)\s+minute|(\d+)\s+min|(\d+)\s+minute/i);
-                  if (durationMatch) {
-                    const hourValue = parseInt(durationMatch[1] || durationMatch[2] || durationMatch[3] || durationMatch[4] || 0, 10);
-                    const minuteValue = parseInt(durationMatch[5] || durationMatch[6] || durationMatch[7] || durationMatch[8] || 0, 10);
-                    
-                    if (hourValue > 0) {
-                      eventDetails.duration = hourValue * 60;
-                    } else if (minuteValue > 0) {
-                      eventDetails.duration = minuteValue;
-                    }
-                  }
-                  
-                  // Create the event
-                  if (eventDetails.title && eventDetails.startDate && eventDetails.startTime) {
-                    await handleCreateCalendarEvent(eventDetails);
-                    return;
-                  } else {
-                    throw new Error("Could not extract complete event details");
-                  }
-                } catch (error) {
-                  console.error("Error handling calendar event:", error);
-                  // Show error message
-                  setMessages(prev => [...prev, { 
-                    text: `I'm sorry, but I couldn't schedule your event. Error: ${error.message}. Please try again with a format like "schedule a meeting with John on March 27, 2025 at 1pm for 2 hours"`, 
-                    sender: 'ai' 
-                  }]);
-                  setIsLoading(false);
-                  return;
-                }
+                parsedResponse = JSON.parse(responseText);
+              }
+            } catch (e) {
+              console.error("Error parsing JSON response:", e);
+              parsedResponse = { isSchedulingRequest: false };
+            }
+            
+            if (parsedResponse.isSchedulingRequest) {
+              const eventDetails = parsedResponse.eventDetails || {};
+              
+              // For consistency, recreate the event details
+              const extractedDetails = {
+                title: eventDetails.title || "Meeting",
+                startDate: eventDetails.startDate || "not specified",
+                startTime: eventDetails.startTime || "not specified",
+                duration: eventDetails.duration || "30",
+                attendees: eventDetails.attendees || ""
+              };
+              
+              try {
+                // Now we have event details, we can try to schedule it
+                await handleCreateCalendarEvent(extractedDetails);
+                
+                // Send normal message to API
+                await sendToGroq([...messages, userMessage]);
+                return;
+              } catch (error) {
+                console.error("Error scheduling event:", error);
+                // Send normal message to API if scheduling fails
               }
             }
           } catch (error) {
-            console.error("Error parsing context detection result:", error);
+            console.error("Error processing scheduling response:", error);
           }
         }
       } catch (error) {
-        console.error("Error detecting scheduling intent:", error);
-        // Continue with normal message handling if context detection fails
+        console.error("Error checking for scheduling intent:", error);
       }
     }
 
     // If we got here, we're handling a regular message (not scheduling)
-    await sendToGroq([...messages, { text: userMessage, sender: 'user' }]);
+    await sendToGroq([...messages, userMessage]);
   };
 
   const [snackbarMessage, setSnackbarMessage] = useState('');
@@ -1459,7 +1357,7 @@ Would you like to confirm this meeting or reschedule it?`,
     }
   };
 
-  // Modified scheduleMeeting function with participant email validation
+  // Modified scheduleMeeting function with fixed date handling
   const scheduleMeeting = async (meetingDetails) => {
     try {
       console.log("Scheduling meeting with details:", meetingDetails);
@@ -1479,315 +1377,267 @@ Would you like to confirm this meeting or reschedule it?`,
         }
       }
       
-      // Parse the date string into a proper Date object
-      let meetingDate;
-      let meetingTime;
+      // Simplify date handling - this is the most reliable approach 
+      let startDateTime, endDateTime;
       
-      // Handle different date formats
-      // 1. Check for month name format (e.g., "24 April 2025" or "April 24, 2025")
-      const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-      const monthPattern = new RegExp(`(\\d{1,2})\\s+(${monthNames.join('|')})\\s+(\\d{4})|((${monthNames.join('|')})\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4}))`, 'i');
+      console.log("Date matching test:", meetingDetails.date, 
+                  "DD-MM-YYYY test:", meetingDetails.date && typeof meetingDetails.date === 'string' && /^\d{1,2}-\d{1,2}-\d{4}$/.test(meetingDetails.date));
       
-      const monthMatch = meetingDetails.date.match(monthPattern);
-      if (monthMatch) {
-        let day, month, year;
-        
-        if (monthMatch[1]) {
-          // Format: 24 April 2025
-          day = parseInt(monthMatch[1], 10);
-          const monthName = monthMatch[2].toLowerCase();
-          month = monthNames.indexOf(monthName) + 1;
-          year = parseInt(monthMatch[3], 10);
-        } else {
-          // Format: April 24, 2025
-          const monthName = monthMatch[4].toLowerCase();
-          month = monthNames.indexOf(monthName) + 1;
-          day = parseInt(monthMatch[6], 10);
-          year = parseInt(monthMatch[7], 10);
-        }
-        
-        // Validate parsed values
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000) {
-          // Store as ISO format (YYYY-MM-DD)
-          meetingDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-          console.log("Parsed month name format to:", meetingDate);
-        } else {
-          console.log("Invalid date values from month pattern:", day, month, year);
-          meetingDate = meetingDetails.date;
-        }
-      } else if (meetingDetails.date.includes("/")) {
-        // Handle MM/DD/YYYY format
-        const parts = meetingDetails.date.split("/");
-        if (parts.length === 3) {
-          // Try to guess if it's MM/DD/YYYY or DD/MM/YYYY
-          let month, day, year;
-          
-          if (parseInt(parts[0], 10) > 12) {
-            // First part is likely the day
-            day = parseInt(parts[0], 10);
-            month = parseInt(parts[1], 10);
-          } else {
-            // First part is likely the month
-            month = parseInt(parts[0], 10);
-            day = parseInt(parts[1], 10);
-          }
-          
-          year = parts[2];
-          // If year is 2 digits, assume it's 2000s
-          if (year.length === 2) year = "20" + year;
-          year = parseInt(year, 10);
-          
-          // Validate parsed values
-          if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000) {
-            meetingDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-            console.log("Parsed slash format to:", meetingDate);
-          } else {
-            console.log("Invalid date values from slash pattern:", day, month, year);
-            meetingDate = meetingDetails.date;
-          }
-        } else {
-          meetingDate = meetingDetails.date;
-        }
-      } else if (meetingDetails.date.includes("-")) {
-        // Handle YYYY-MM-DD or DD-MM-YYYY format
-        const parts = meetingDetails.date.split("-");
-        if (parts.length === 3) {
-          let day, month, year;
-          
-          // Check if first part is 4 digits (year)
-          if (parts[0].length === 4) {
-            // YYYY-MM-DD format
-            year = parseInt(parts[0], 10);
-            month = parseInt(parts[1], 10);
-            day = parseInt(parts[2], 10);
-            
-            // Already in ISO format, but validate
-            if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000) {
-              meetingDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-              console.log("Parsed ISO format to:", meetingDate);
-            } else {
-              console.log("Invalid date values from ISO pattern:", day, month, year);
-              meetingDate = meetingDetails.date;
-            }
-          } else {
-            // Likely DD-MM-YYYY
-            day = parseInt(parts[0], 10);
-            month = parseInt(parts[1], 10);
-            year = parseInt(parts[2], 10);
-            
-            // Validate parsed values
-            if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000) {
-              meetingDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-              console.log("Parsed dash format to:", meetingDate);
-            } else {
-              console.log("Invalid date values from dash pattern:", day, month, year);
-              meetingDate = meetingDetails.date;
-            }
-          }
-        } else {
-          meetingDate = meetingDetails.date;
-        }
-      } else if (meetingDetails.date === "not specified") {
-        // Default to tomorrow if date not specified
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        meetingDate = tomorrow.toISOString().split('T')[0];
-        console.log("Using default tomorrow date:", meetingDate);
-      } else {
-        // Try to parse using built-in Date
-        try {
-          const dateObj = new Date(meetingDetails.date);
-          if (!isNaN(dateObj.getTime())) {
-            const year = dateObj.getFullYear();
-            const month = dateObj.getMonth() + 1;
-            const day = dateObj.getDate();
-            meetingDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-            console.log("Parsed using Date constructor:", meetingDate);
-          } else {
-            console.log("Date constructor failed, using original:", meetingDetails.date);
-            meetingDate = meetingDetails.date;
-          }
-        } catch (e) {
-          console.error("Error with Date constructor:", e);
-          meetingDate = meetingDetails.date;
-        }
-      }
-      
-      // Handle time format with robust handling for all formats
-      // 1. First check for simple format like "2 PM" or "2 pm"
-      const simpleTimeMatch = meetingDetails.time.match(/^\s*(\d{1,2})\s*([ap]m)\s*$/i);
-      if (simpleTimeMatch) {
-        let hours = parseInt(simpleTimeMatch[1], 10);
-        const period = simpleTimeMatch[2].toLowerCase();
-        
-        // Convert to 24-hour format
-        if (period === 'pm' && hours < 12) {
-          hours += 12;
-        } else if (period === 'am' && hours === 12) {
-          hours = 0;
-        }
-        
-        meetingTime = `${hours.toString().padStart(2, '0')}:00`;
-        console.log("Parsed simple time format to:", meetingTime);
-      }
-      // 2. Check for format with minutes like "2:30 PM" or "14:30"
-      else if (meetingDetails.time.match(/^\s*(\d{1,2}):(\d{2})\s*([ap]m)?\s*$/i)) {
-        const timeParts = meetingDetails.time.match(/^\s*(\d{1,2}):(\d{2})\s*([ap]m)?\s*$/i);
-        let hours = parseInt(timeParts[1], 10);
-        const minutes = parseInt(timeParts[2], 10);
-        const period = timeParts[3] ? timeParts[3].toLowerCase() : null;
-        
-        // Convert to 24-hour format if period is specified
-        if (period === 'pm' && hours < 12) {
-          hours += 12;
-        } else if (period === 'am' && hours === 12) {
-          hours = 0;
-        }
-        
-        meetingTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-        console.log("Parsed time with minutes to:", meetingTime);
-      }
-      // 3. Check for single hour number, like "2"
-      else if (meetingDetails.time.match(/^\s*(\d{1,2})\s*$/)) {
-        const hour = parseInt(meetingDetails.time.match(/^\s*(\d{1,2})\s*$/)[1], 10);
-        // Default assumption: hour in the range 0-23
-        meetingTime = `${hour.toString().padStart(2, '0')}:00`;
-        console.log("Parsed single hour to:", meetingTime);
-      }
-      else if (meetingDetails.time === "not specified") {
-        // Default to 9:00 AM if time not specified
-        meetingTime = "09:00";
-        console.log("Using default time 09:00");
-      }
-      else {
-        // Just use the original time string
-        console.log("No standard pattern matched for time, using original:", meetingDetails.time);
-        meetingTime = meetingDetails.time;
-      }
-      
-      console.log("Final parsed date and time:", meetingDate, meetingTime);
-      
-      // Ensure we have a valid date-time string
+      // First try standard format parsing - this works in many cases
       try {
-        let testDate = null;
-        
-        // Try multiple construction methods for maximum compatibility
-        // Method 1: ISO format
-        try {
-          console.log(`Attempting ISO format: ${meetingDate}T${meetingTime}`);
-          testDate = new Date(`${meetingDate}T${meetingTime}`);
+        if (meetingDetails.date && meetingDetails.time) {
+          // Try with various common formats
+          let testDate = new Date(`${meetingDetails.date} ${meetingDetails.time}`);
           if (!isNaN(testDate.getTime())) {
-            console.log("ISO format succeeded");
-          }
-        } catch (e) {
-          console.error("ISO format error:", e);
-        }
-        
-        // Method 2: Space-separated format
-        if (!testDate || isNaN(testDate.getTime())) {
-          try {
-            console.log(`Attempting space format: ${meetingDate} ${meetingTime}`);
-            testDate = new Date(`${meetingDate} ${meetingTime}`);
-            if (!isNaN(testDate.getTime())) {
-              console.log("Space format succeeded");
-            }
-          } catch (e) {
-            console.error("Space format error:", e);
+            console.log("Standard date parsing succeeded:", testDate);
+            startDateTime = testDate;
+            endDateTime = new Date(testDate.getTime() + 60 * 60 * 1000); // 1 hour later
+            
+            // Skip the manual parsing
+            throw new Error("SKIP_MANUAL_PARSING");
           }
         }
-        
-        // Method 3: Direct component construction
-        if (!testDate || isNaN(testDate.getTime())) {
-          try {
-            const [year, month, day] = meetingDate.split('-').map(Number);
-            const [hours, minutes] = meetingTime.split(':').map(Number);
-            
-            console.log("Attempting direct construction:", year, month-1, day, hours, minutes);
-            testDate = new Date(year, month - 1, day, hours, minutes);
-            
-            // Verify the date is valid by checking the component values
-            const isValid = (
-              testDate.getFullYear() === year && 
-              testDate.getMonth() === month - 1 && 
-              testDate.getDate() === day && 
-              testDate.getHours() === hours && 
-              testDate.getMinutes() === minutes
-            );
-            
-            if (isValid) {
-              console.log("Direct construction succeeded");
-            } else {
-              console.warn("Direct construction created invalid date, will try another method");
-              testDate = null;
-            }
-          } catch (e) {
-            console.error("Direct construction error:", e);
-          }
+      } catch (err) {
+        if (err.message === "SKIP_MANUAL_PARSING") {
+          // Just continue with the dates we already successfully created
+          console.log("Using standard parsed dates:", { start: startDateTime, end: endDateTime });
+        } else {
+          // Continue to manual parsing
+          console.log("Standard date parsing failed, falling back to manual:", err);
         }
-        
-        // Method 4: Manual ISO string construction
-        if (!testDate || isNaN(testDate.getTime())) {
-          try {
-            const [year, month, day] = meetingDate.split('-').map(Number);
-            const [hours, minutes] = meetingTime.split(':').map(Number);
-            
-            const isoString = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-            console.log("Attempting ISO string construction:", isoString);
-            testDate = new Date(isoString);
-            
-            if (!isNaN(testDate.getTime())) {
-              console.log("ISO string construction succeeded");
-            } else {
-              console.warn("ISO string construction failed");
-            }
-          } catch (e) {
-            console.error("ISO string construction error:", e);
-          }
-        }
-        
-        // Final fallback: try parsing the raw date and time inputs
-        if (!testDate || isNaN(testDate.getTime())) {
-          try {
-            console.log("Attempting to parse raw inputs:", meetingDetails.date, meetingDetails.time);
-            const combinedString = `${meetingDetails.date} ${meetingDetails.time}`;
-            testDate = new Date(combinedString);
-            
-            if (!isNaN(testDate.getTime())) {
-              console.log("Raw input parsing succeeded");
-            } else {
-              console.warn("All parsing methods failed");
-            }
-          } catch (e) {
-            console.error("Raw input parsing error:", e);
-          }
-        }
-        
-        if (!testDate || isNaN(testDate.getTime())) {
-          throw new Error(`Could not create a valid date from: ${meetingDate} ${meetingTime}`);
-        }
-        
-        console.log("Final date object:", testDate, "ISO string:", testDate.toISOString());
-        
-        const startDateTime = testDate;
-        const endDateTime = new Date(startDateTime.getTime() + 60 * 60 * 1000); // 1 hour
-        
-        const eventData = calendarService.formatEvent(
-          `Meeting: ${meetingDetails.purpose || 'Discussion'}`,
-          `Meeting ${meetingDetails.purpose ? `about ${meetingDetails.purpose}` : ''} on ${meetingDetails.date} at ${meetingDetails.time}`,
-          startDateTime,
-          endDateTime,
-          validParticipants // Use validated participants
-        );
-
-        await calendarService.createEvent("primary", eventData);
-        showSnackbar("Meeting scheduled successfully!", "success");
-      } catch (error) {
-        console.error("Date parsing error:", error);
-        throw new Error(`Failed to create calendar event: ${error.message}`);
       }
+      
+      // If standard parsing failed, try manual parsing
+      if (!startDateTime) {
+        // If we're dealing with DD-MM-YYYY format (like 31-03-2025)
+        if (meetingDetails.date && typeof meetingDetails.date === 'string') {
+          // Test all possible date patterns
+          const ddmmyyyyHyphen = meetingDetails.date.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+          const ddmmyyyySlash = meetingDetails.date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          
+          // Log matching results for debugging
+          console.log("Date patterns:", { 
+            hyphenMatch: ddmmyyyyHyphen, 
+            slashMatch: ddmmyyyySlash 
+          });
+          
+          if (ddmmyyyyHyphen) {
+            // Format is DD-MM-YYYY
+            const day = parseInt(ddmmyyyyHyphen[1], 10);
+            const month = parseInt(ddmmyyyyHyphen[2], 10) - 1; // JS months are 0-indexed
+            const year = parseInt(ddmmyyyyHyphen[3], 10);
+            
+            console.log(`Parsed hyphen date: Day=${day}, Month=${month+1}, Year=${year}`);
+            
+            // Parse time separately
+            let hours = 9, minutes = 0;
+            
+            if (meetingDetails.time) {
+              console.log("Parsing time:", meetingDetails.time);
+              
+              // Try all possible time formats
+              const timeWithSpacePM = meetingDetails.time.match(/(\d{1,2})\s*([ap]m)/i);
+              const timeWithoutSpace = meetingDetails.time.match(/(\d{1,2})([ap]m)/i);
+              const timeWithColon = meetingDetails.time.match(/(\d{1,2}):(\d{2})(?:\s*([ap]m))?/i);
+              
+              console.log("Time patterns:", {
+                timeWithSpacePM,
+                timeWithoutSpace,
+                timeWithColon
+              });
+              
+              if (timeWithSpacePM) {
+                // Format like "5 pm" or "10 AM"
+                hours = parseInt(timeWithSpacePM[1], 10);
+                const isPM = timeWithSpacePM[2].toLowerCase() === 'pm';
+                
+                if (isPM && hours < 12) hours += 12;
+                if (!isPM && hours === 12) hours = 0;
+              } else if (timeWithoutSpace) {
+                // Format like "5pm" or "10AM"
+                hours = parseInt(timeWithoutSpace[1], 10);
+                const isPM = timeWithoutSpace[2].toLowerCase() === 'pm';
+                
+                if (isPM && hours < 12) hours += 12;
+                if (!isPM && hours === 12) hours = 0;
+              } else if (timeWithColon) {
+                // Format like "17:30" or "5:30 PM"
+                hours = parseInt(timeWithColon[1], 10);
+                minutes = parseInt(timeWithColon[2], 10);
+                
+                const isPM = timeWithColon[3] && timeWithColon[3].toLowerCase() === 'pm';
+                if (isPM && hours < 12) hours += 12;
+                else if (timeWithColon[3] && timeWithColon[3].toLowerCase() === 'am' && hours === 12) hours = 0;
+              }
+              
+              console.log(`Final time: Hours=${hours}, Minutes=${minutes}`);
+            }
+            
+            // Create date objects with the explicit year, month, day, hours, minutes
+            try {
+              console.log(`Creating date with: Year=${year}, Month=${month}, Day=${day}, Hours=${hours}, Minutes=${minutes}`);
+              startDateTime = new Date(year, month, day, hours, minutes);
+              endDateTime = new Date(year, month, day, hours + 1, minutes); // 1 hour meeting
+              
+              // Validate the created date
+              if (isNaN(startDateTime.getTime())) {
+                throw new Error("Invalid date created");
+              }
+              
+              console.log("Successfully created dates:", {
+                start: startDateTime.toISOString(),
+                end: endDateTime.toISOString()
+              });
+            } catch (dateErr) {
+              console.error("Error creating date:", dateErr);
+              
+              // Fallback to a valid date
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              tomorrow.setHours(hours, minutes, 0, 0);
+              
+              startDateTime = tomorrow;
+              endDateTime = new Date(tomorrow.getTime() + 60 * 60 * 1000);
+            }
+          } else if (ddmmyyyySlash) {
+            // Handle DD/MM/YYYY format similarly
+            const day = parseInt(ddmmyyyySlash[1], 10);
+            const month = parseInt(ddmmyyyySlash[2], 10) - 1; // JS months are 0-indexed
+            const year = parseInt(ddmmyyyySlash[3], 10);
+            
+            console.log(`Parsed slash date: Day=${day}, Month=${month+1}, Year=${year}`);
+            
+            // Parse time (same as above)
+            let hours = 9, minutes = 0;
+            
+            if (meetingDetails.time) {
+              const timeMatch = meetingDetails.time.match(/(\d{1,2})(?::(\d{2}))?\s*([ap]m)?/i);
+              if (timeMatch) {
+                hours = parseInt(timeMatch[1], 10);
+                minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+                
+                if (timeMatch[3] && timeMatch[3].toLowerCase() === 'pm' && hours < 12) {
+                  hours += 12;
+                } else if (timeMatch[3] && timeMatch[3].toLowerCase() === 'am' && hours === 12) {
+                  hours = 0;
+                }
+              }
+            }
+            
+            // Create date objects
+            startDateTime = new Date(year, month, day, hours, minutes);
+            endDateTime = new Date(year, month, day, hours + 1, minutes);
+            
+            console.log("Created dates:", {
+              start: startDateTime.toISOString(),
+              end: endDateTime.toISOString()
+            });
+          } else {
+            // For other date formats, try some common conversions
+            let dateStr = meetingDetails.date;
+            let timeStr = meetingDetails.time || "09:00";
+            
+            // Try to convert to YYYY-MM-DD format for better compatibility
+            const ukDateMatch = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+            if (ukDateMatch) {
+              const day = ukDateMatch[1];
+              const month = ukDateMatch[2];
+              const year = ukDateMatch[3];
+              dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+              console.log("Converted UK date format to ISO:", dateStr);
+            }
+            
+            try {
+              // Combine and parse
+              const combinedDateStr = `${dateStr}T${timeStr}`;
+              const date = new Date(combinedDateStr);
+              
+              if (!isNaN(date.getTime())) {
+                startDateTime = date;
+                endDateTime = new Date(date.getTime() + 60 * 60 * 1000);
+                console.log("Parsed with combined approach:", startDateTime);
+              } else {
+                throw new Error("Invalid date created with combined approach");
+              }
+            } catch (err) {
+              console.error("Combined date approach failed:", err);
+              
+              // Default to tomorrow at specified time or 9 AM
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              
+              // Try to extract hours and minutes from timeStr
+              let hours = 9, minutes = 0;
+              const timeMatch = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*([ap]m)?/i);
+              if (timeMatch) {
+                hours = parseInt(timeMatch[1], 10);
+                minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+                
+                if (timeMatch[3] && timeMatch[3].toLowerCase() === 'pm' && hours < 12) {
+                  hours += 12;
+                } else if (timeMatch[3] && timeMatch[3].toLowerCase() === 'am' && hours === 12) {
+                  hours = 0;
+                }
+              }
+              
+              tomorrow.setHours(hours, minutes, 0, 0);
+              startDateTime = tomorrow;
+              endDateTime = new Date(tomorrow.getTime() + 60 * 60 * 1000);
+            }
+          }
+        } else {
+          // Default to tomorrow at 9 AM
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          tomorrow.setHours(9, 0, 0, 0);
+          
+          startDateTime = tomorrow;
+          endDateTime = new Date(tomorrow.getTime() + 60 * 60 * 1000); // 1 hour later
+        }
+      }
+      
+      // Final validation
+      if (isNaN(startDateTime.getTime()) || isNaN(endDateTime.getTime())) {
+        throw new Error("Invalid dates created after all parsing attempts");
+      }
+      
+      // Format meeting title and description
+      const meetingTitle = `Meeting: ${meetingDetails.purpose || 'Discussion'}`;
+      const meetingDesc = `Meeting ${meetingDetails.purpose ? `about ${meetingDetails.purpose}` : ''} on ${meetingDetails.date} at ${meetingDetails.time}`;
+      
+      console.log("Creating event with:", {
+        title: meetingTitle,
+        description: meetingDesc,
+        start: startDateTime.toISOString(),
+        end: endDateTime.toISOString()
+      });
+      
+      // Skip the formatEvent method and directly create the event object
+      // This bypasses the date validation in calendarService.formatEvent
+      const eventData = {
+        summary: meetingTitle,
+        description: meetingDesc,
+        start: {
+          dateTime: startDateTime.toISOString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        },
+        end: {
+          dateTime: endDateTime.toISOString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        },
+        attendees: validParticipants.map(email => ({ email }))
+      };
+
+      // Call the API to create the event
+      const result = await calendarService.createEvent("primary", eventData);
+      console.log("Calendar event created successfully:", result);
+      showSnackbar("Meeting scheduled successfully!", "success");
+      
+      return result;
     } catch (error) {
       console.error("Error scheduling meeting:", error);
       showSnackbar(`Failed to schedule meeting: ${error.message}`, "error");
+      throw error;
     }
   };
 
@@ -1859,6 +1709,121 @@ Would you like to confirm this meeting or reschedule it?`,
       return () => clearInterval(meetingCheckInterval);
     }
   }, [isCalendarAvailable, checkUpcomingMeetings]);
+
+  const handleVisualize = () => {
+    if (capturedText) {
+      console.log("Attempting to visualize captured text");
+      
+      // Get SQL query first, as it may contain important context
+      const sqlQuery = extractSQLQuery(capturedText);
+      
+      // Try to extract data from the captured text
+      const tableData = parseTableData(capturedText);
+      
+      console.log("Parsing results:", { 
+        hasTableData: !!tableData, 
+        rowCount: tableData ? tableData.length : 0,
+        hasSqlQuery: !!sqlQuery
+      });
+      
+      // Update hasSQL state if SQL was detected
+      if (sqlQuery) {
+        setHasSQL(true);
+      }
+      
+      if (tableData && tableData.length > 0) {
+        console.log("Table data sample:", tableData[0]);
+        
+        // Check if this is just a count result
+        const isCountResult = tableData.length === 1 && 
+                              Object.keys(tableData[0]).length === 1 && 
+                              Object.keys(tableData[0])[0].toLowerCase().includes('count');
+        
+        // Log that we detected a count result
+        if (isCountResult) {
+          console.log("Detected count result:", tableData[0]);
+        }
+        
+        // Set SQL data and open visualization
+        setSqlData(tableData);
+        setSqlQuery(sqlQuery || '');
+        setSqlVisualizationOpen(true);
+      } else {
+        console.warn("Failed to extract table data from captured text");
+        setErrorSnack({
+          open: true,
+          message: "Could not parse table data from the captured content. Try capturing a clearer view of the table."
+        });
+      }
+    } else {
+      setErrorSnack({
+        open: true,
+        message: "No screen content captured yet. Please capture a screen with data first."
+      });
+    }
+  };
+
+  const handleCloseVisualization = () => {
+    setSqlVisualizationOpen(false);
+  };
+
+  // Handle meeting confirmation dialog close
+  const handleCloseMeetingConfirmation = () => {
+    setShowMeetingConfirmation(false);
+  };
+
+  // Handle meeting confirmation
+  const handleConfirmMeeting = () => {
+    if (!meetingDetails) return;
+    
+    // Create a meeting message for the chat
+    const messageText = `I confirm the meeting${meetingDetails.date ? ' on ' + meetingDetails.date : ''}${meetingDetails.time ? ' at ' + meetingDetails.time : ''}.`;
+    
+    // Add the user's confirmation message to the chat
+    const newMessage = { id: Date.now(), sender: 'user', text: messageText };
+    setMessages(prev => [...prev, newMessage]);
+    
+    // Automatically respond to confirm
+    setTimeout(() => {
+      const aiMessage = { 
+        id: Date.now() + 1, 
+        sender: 'ai', 
+        text: `Great! I've confirmed your meeting${meetingDetails.date ? ' on ' + meetingDetails.date : ''}${meetingDetails.time ? ' at ' + meetingDetails.time : ''}. It's been added to your calendar.` 
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      
+      // If the calendar is available, schedule the meeting using our fixed function
+      if (isCalendarAvailable) {
+        scheduleMeeting(meetingDetails);
+      }
+    }, 800);
+    
+    setShowMeetingConfirmation(false);
+  };
+
+  // Handle meeting reschedule
+  const handleRescheduleMeeting = () => {
+    if (!meetingDetails) return;
+    
+    // Create a reschedule message
+    const messageText = "I'd like to reschedule this meeting. Can we find another time?";
+    
+    // Add the user's message to the chat
+    const newMessage = { id: Date.now(), sender: 'user', text: messageText };
+    setMessages(prev => [...prev, newMessage]);
+    
+    // Automatically respond to ask for a new time
+    setTimeout(() => {
+      const aiMessage = { 
+        id: Date.now() + 1, 
+        sender: 'ai', 
+        text: "Of course! What date and time would work better for you?" 
+      };
+      setMessages(prev => [...prev, aiMessage]);
+    }, 800);
+    
+    setShowMeetingConfirmation(false);
+  };
 
   return (
     <Box sx={{ 
@@ -2292,6 +2257,28 @@ Would you like to confirm this meeting or reschedule it?`,
             {isCapturing ? <CircularProgress size={24} /> : <ScreenshotMonitor />}
         </IconButton>
         </Tooltip>
+        
+        {/* Visualization Button - Only shown when SQL data is available */}
+        {hasSQL && (
+          <Tooltip title="Visualize SQL Data">
+            <IconButton 
+              onClick={handleVisualize}
+              sx={{ 
+                ml: 1, 
+                color: '#4caf50',
+                backgroundColor: '#3d4a5c',
+                '&:hover': {
+                  backgroundColor: '#4f5b6d',
+                },
+                height: 40,
+                width: 40
+              }}
+            >
+              <BarChart />
+            </IconButton>
+          </Tooltip>
+        )}
+        
         <IconButton 
           onClick={handleSend} 
           sx={{ 
@@ -2442,6 +2429,44 @@ Would you like to confirm this meeting or reschedule it?`,
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Meeting Confirmation Dialog */}
+      <Dialog
+        open={showMeetingConfirmation}
+        onClose={handleCloseMeetingConfirmation}
+        aria-labelledby="meeting-confirmation-dialog-title"
+      >
+        <DialogTitle id="meeting-confirmation-dialog-title">
+          Meeting Request Detected
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {meetingDetails?.date && meetingDetails?.time ? 
+              `Would you like to confirm a meeting on ${meetingDetails.date} at ${meetingDetails.time}?` :
+              meetingDetails?.date ? 
+              `Would you like to confirm a meeting on ${meetingDetails.date}?` :
+              meetingDetails?.time ? 
+              `Would you like to confirm a meeting at ${meetingDetails.time}?` :
+              'Would you like to confirm this meeting?'
+            }
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleRescheduleMeeting} color="primary">
+            Reschedule
+          </Button>
+          <Button onClick={handleConfirmMeeting} color="primary" variant="contained">
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* SQL Visualization Dialog */}
+      <SimpleBarChart 
+        open={sqlVisualizationOpen} 
+        onClose={handleCloseVisualization} 
+        data={sqlData} 
+      />
     </Box>
   );
 }
