@@ -1,5 +1,5 @@
 # SQL Agent - AI-Powered SQL Assistant
-
+[Powerpoint Presentation](https://drive.google.com/file/d/1iNMxsFH-LbT_1h4rMRBAcRBn2932BjtN/view?usp=sharing)
 ## Overview
 SQL Agent is a **Desktop Application** built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes SQL-related queries using **LLM Llama 3.3 7B Versatile Model**. The assistant generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
 
@@ -63,3 +63,5 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
 4. <img src="photos/4.png" width="300">
 5. <img src="photos/5.png" width="400">
 6. <img src="photos/6.png" width="400">
+
+##
