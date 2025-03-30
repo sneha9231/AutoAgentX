@@ -1,7 +1,7 @@
 # SQL Agent - AI-Powered SQL Assistant
 
 ## Overview
-SQL Agent is a desktop application built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes SQL-related queries using **LLM Llama 3.3 7B Versatile Model**. The assistant generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
+SQL Agent is a **Desktop Application** built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes SQL-related queries using **LLM Llama 3.3 7B Versatile Model**. The assistant generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
 
 ## Features
 - **Screen Capture & OCR**: Extracts SQL-related queries from the screen.
@@ -47,12 +47,19 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
 
 ## Usage
 - Open the application and capture an SQL-related query on the screen.
-- The assistant will analyze the query and generate the corresponding SQL.
+- The assistant will analyze the query and generate the corresponding SQL or any other work.
 - Results will be displayed along with **charts or tabular data**.
 
 ## Future Enhancements
 - Support for more database integrations.
 - Improved OCR accuracy.
 - Enhanced scheduling features.
+- Send email by prompt
 
-
+## Some Pictures
+1. <img src="photos/1.png" width="300">
+2. <img src="photos/2.png" width="300">
+3. <img src="photos/3.png" width="300">
+4. <img src="photos/4.png" width="300">
+5. <img src="photos/5.png" width="400">
+6. <img src="photos/6.png" width="400">
