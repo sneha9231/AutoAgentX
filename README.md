@@ -1,4 +1,4 @@
-# SQL Agent - AI-Powered SQL Assistant
+# AutoAgentX - AI-Powered Multi-Task Assistant
 [Powerpoint Presentation](https://drive.google.com/file/d/1iNMxsFH-LbT_1h4rMRBAcRBn2932BjtN/view?usp=sharing)
 ## Overview
 SQL Agent is a **Desktop Application** built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes SQL-related queries using **LLM Llama 3.3 7B Versatile Model**. The assistant generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
