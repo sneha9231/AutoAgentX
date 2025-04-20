@@ -1,7 +1,7 @@
 # AutoAgentX - AI-Powered Multi-Task Assistant
-[Powerpoint Presentation](https://drive.google.com/file/d/1iNMxsFH-LbT_1h4rMRBAcRBn2932BjtN/view?usp=sharing)
+
 ## Overview
-SQL Agent is a **Desktop Application** built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes SQL-related queries using **LLM Llama 3.3 7B Versatile Model**. The assistant generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
+This Agent is a **Desktop Application** built with **React** and **Electron**. It captures the screen, extracts text using **OCR**, and processes queries using **LLM Llama 3.3 7B Versatile Model**. The assistant can understands on-screen content to solve questions, schedule meetings by reading emails, or take other prompt-based actions and also generates SQL queries from natural language inputs and provides **accurate solutions with visual reports**.
 
 ## Features
 - **Screen Capture & OCR**: Extracts SQL-related queries from the screen.
@@ -10,9 +10,6 @@ SQL Agent is a **Desktop Application** built with **React** and **Electron**. It
 - **Data Visualization**: Generates charts and reports with **Chart.js**.
 - **Desktop Application**: Built with **React and Electron** for a smooth user experience.
 - **Google Calendar Integration** (Additional Feature): Can schedule meetings based on user availability.
-
-## Problem Statement
-The application solves the problem of **Auto-Generating SQL Queries Using Natural Language**. It enables users to interact with databases using plain text queries, eliminating the need for SQL knowledge. The tool automates query generation and result visualization, making data retrieval easier and faster.
 
 ## Technologies Used
 - **Frontend**: React, Electron
@@ -23,8 +20,8 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
 
 ## How It Works
 1. **Capture the Screen**: The app captures the screen and extracts SQL-related text.
-2. **Process the Query**: The extracted text is passed to the **LLM model**, which generates the SQL command.
-3. **Execute & Visualize**: The generated SQL is executed, and results are displayed in **text or chart format**.
+2. **Process the Query**: The extracted text is passed to the **LLM model**, understands visual context and allows natural language prompting to perform tasks
+3. **Execute & Visualize**: The generated task is executed, and results are displayed in **text or chart format**.
 
 ## Installation
 1. Clone the repository:
@@ -46,8 +43,8 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
     ```
 
 ## Usage
-- Open the application and capture an SQL-related query on the screen.
-- The assistant will analyze the query and generate the corresponding SQL or any other work.
+- Open the application and capture your task on the screen.
+- The assistant will analyze the work and generate the corresponding answers.
 - Results will be displayed along with **charts or tabular data**.
 
 ## Future Enhancements
@@ -65,3 +62,6 @@ The application solves the problem of **Auto-Generating SQL Queries Using Natura
 6. <img src="photos/6.png" width="400">
 
 ##
+
+Prev Version:
+[Powerpoint Presentation](https://drive.google.com/file/d/1iNMxsFH-LbT_1h4rMRBAcRBn2932BjtN/view?usp=sharing)
